@@ -1,0 +1,654 @@
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+class InvalidChoiceException : public std::runtime_error {
+public:
+    explicit InvalidChoiceException(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+namespace ui {
+
+void clear() {
+#ifdef _WIN32
+    std::system("cls");
+#else
+    std::system("clear");
+#endif
+}
+
+void waitEnter(const std::string& prompt = "(Press Enter to continue)") {
+    std::cout << "\n" << prompt;
+    std::string s;
+    if (!std::getline(std::cin, s)) throw std::runtime_error("input closed");
+}
+
+int readChoice(int lo, int hi) {
+    std::cout << "\n> ";
+    std::string line;
+    if (!std::getline(std::cin, line)) throw std::runtime_error("input closed");
+
+    size_t b = line.find_first_not_of(" \t\r\n");
+    size_t e = line.find_last_not_of(" \t\r\n");
+    if (b == std::string::npos) throw InvalidChoiceException("Please type a number.");
+    line = line.substr(b, e - b + 1);
+
+    for (char ch : line)
+        if (ch < '0' || ch > '9')
+            throw InvalidChoiceException("'" + line + "' is not a valid number. Please type " +
+                                         std::to_string(lo) + " to " + std::to_string(hi) + ".");
+    if (line.size() > 6) throw InvalidChoiceException("That number is too big.");
+
+    int n = std::stoi(line);
+    if (n < lo || n > hi)
+        throw InvalidChoiceException("Please choose between " + std::to_string(lo) + " and " +
+                                     std::to_string(hi) + ".");
+    return n;
+}
+
+int askChoice(int lo, int hi) {
+    while (true) {
+        try {
+            return readChoice(lo, hi);
+        } catch (const InvalidChoiceException& e) {
+            std::cout << e.what() << "\n";
+        }
+    }
+}
+
+}
+
+enum class Gender { None, Male, Female };
+
+class Player {
+public:
+    Gender gender() const { return gender_; }
+    int happiness() const { return happiness_; }
+    int parents() const { return parents_; }
+    int log() const { return log_; }
+    const std::string& personality() const { return personality_; }
+    int stage() const { return stage_; }
+    int path() const { return path_; }
+
+    void setGender(Gender g) { gender_ = g; }
+    void setStats(int h, int p, int l) { happiness_ = h; parents_ = p; log_ = l; }
+    void setPersonality(const std::string& s) { personality_ = s; }
+    void setStage(int s) { stage_ = s; }
+    void setPath(int p) { path_ = p; }
+
+    std::string genderName() const {
+        return gender_ == Gender::Male ? "Boy" : gender_ == Gender::Female ? "Girl" : "Unknown";
+    }
+
+    void showStats() const {
+        std::cout << "\n[ Happiness: " << happiness_ << " | Parents ki khushi: " << parents_
+                  << " | Log kya sochenge: " << log_ << " ]\n";
+    }
+
+private:
+    Gender gender_ = Gender::None;
+    int happiness_ = 100;
+    int parents_ = 0;
+    int log_ = 0;
+    std::string personality_ = "NONE";
+    int stage_ = 0;
+    int path_ = 0;
+};
+
+class Settings {
+public:
+    bool spicy() const { return spicy_; }
+    void setSpicy(bool v) { spicy_ = v; }
+
+private:
+    bool spicy_ = true;
+};
+
+class FileManager {
+public:
+    static constexpr const char* SAVE = "savegame.txt";
+    static constexpr const char* SETTINGS = "settings.txt";
+    static constexpr const char* HISTORY = "history.txt";
+
+    void saveSettings(const Settings& s) const {
+        std::ofstream f(SETTINGS);
+        if (!f) {
+            warn(SETTINGS);
+            return;
+        }
+        f << "spicy=" << (s.spicy() ? 1 : 0) << "\n";
+    }
+
+    void loadSettings(Settings& s) const {
+        auto kv = readKeyValues(SETTINGS);
+        if (kv.count("spicy")) s.setSpicy(kv["spicy"] != "0");
+    }
+
+    void saveGame(const Player& p) const {
+        std::ofstream f(SAVE);
+        if (!f) {
+            warn(SAVE);
+            return;
+        }
+        f << "gender=" << (p.gender() == Gender::Male ? "MALE" : "FEMALE") << "\n"
+          << "happiness=" << p.happiness() << "\n"
+          << "parents=" << p.parents() << "\n"
+          << "log=" << p.log() << "\n"
+          << "personality=" << p.personality() << "\n"
+          << "stage=" << p.stage() << "\n"
+          << "path=" << p.path() << "\n";
+    }
+
+    bool loadGame(Player& out) const {
+        auto kv = readKeyValues(SAVE);
+        if (kv.empty()) return false;
+        try {
+            if (!kv.count("gender") || !kv.count("happiness") || !kv.count("parents") ||
+                !kv.count("log") || !kv.count("stage") || !kv.count("path"))
+                return false;
+
+            Player p;
+            if (kv["gender"] == "MALE") p.setGender(Gender::Male);
+            else if (kv["gender"] == "FEMALE") p.setGender(Gender::Female);
+            else return false;
+
+            p.setStats(std::stoi(kv["happiness"]), std::stoi(kv["parents"]), std::stoi(kv["log"]));
+            p.setStage(std::stoi(kv["stage"]));
+            p.setPath(std::stoi(kv["path"]));
+
+            if (p.stage() < 0 || p.stage() > 1 || (p.path() != 0 && p.path() != 1))
+                return false;
+
+            if (kv.count("personality")) p.setPersonality(kv["personality"]);
+            out = p;
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+
+    bool hasSave() const {
+        std::ifstream f(SAVE);
+        return f.good();
+    }
+
+    void clearSave() const {
+        std::remove(SAVE);
+    }
+
+    void logChoice(const std::string& age, const Player& p, const std::string& label) const {
+        std::ofstream f(HISTORY, std::ios::app);
+        if (!f) return;
+
+        f << age << " | " << p.genderName() << " | " << label << " | Happiness " << p.happiness()
+          << ", Parents " << p.parents() << ", Log " << p.log() << "\n";
+    }
+
+private:
+    static void warn(const char* name) {
+        std::cout << "(Warning: could not write " << name << ")\n";
+    }
+
+    static std::map<std::string, std::string> readKeyValues(const char* path) {
+        std::map<std::string, std::string> kv;
+        std::ifstream f(path);
+        std::string line;
+
+        while (std::getline(f, line)) {
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+
+            std::string v = line.substr(eq + 1);
+            while (!v.empty() && (v.back() == '\r' || v.back() == ' '))
+                v.pop_back();
+
+            kv[line.substr(0, eq)] = v;
+        }
+
+        return kv;
+    }
+};
+
+struct Context {
+    Player player;
+    Settings settings;
+    FileManager files;
+};
+
+struct Choice {
+    std::string label;
+    std::string result;
+    int happiness, parents, log;
+    std::string personality;
+    std::string personalityDesc;
+};
+
+struct Scene {
+    std::string preface;
+    std::string text;
+    std::vector<Choice> choices;
+};
+
+namespace story {
+
+const std::string BOY_PREFACE = R"T(Your height has been growing like crazy.
+Facial hair has started showing up.
+And your voice has deepened.)T";
+
+const std::string GIRL_PREFACE = R"T(* Your periods have started, and you hate the cramps and
+  pain that come with them.
+* Your brother keeps getting taller and getting praised,
+  while you get told to sit properly and dress appropriately.
+* You've started noticing the partiality at home, and sometimes
+  it feels like even God is playing favourites.
+* You realise how much easier being a man seems to be.
+* Some men have suddenly become more helpful and polite.
+  That's nice, at least.
+* But some get weird when you call them bhaiya and tell you
+  to stop.
+* Men in groups have started staring at you for a little too
+  long, making you uncomfortable.)T";
+
+Scene age10(Gender g) {
+    if (g == Gender::Male) {
+        return {"",
+                R"T(It's your peak childhood.
+How do you want to live this phase?
+SPOILER: this will be the base of your whole personality.)T",
+                {{"Enjoy with your friends more",
+                  R"T(Wow, you really enjoyed your childhood. You are very happy.
+But your parents are not, and neither is your teacher.
+You get compared with Sharma ji ka ladka every day.)T",
+                  90, 60, 0, "", ""},
+                 {"Focus on studies more",
+                  R"T(Really great, you have become Sharma ji ka ladka.
+Maybe some classmates don't like you, but your teacher
+definitely does. You got 90/100 in 4th std, but your
+parents still ask why you didn't get those 10.)T",
+                  75, 90, 0, "", ""}}};
+    }
+
+    return {"",
+            R"T(It's your peak childhood.
+Your mother has started asking you for help with household
+work, even when your brother is just watching TV.
+Never mind, it's just simple work.
+
+How do you want to live this phase?
+SPOILER: this will be the base of your whole personality.)T",
+            {{"Prioritize studies",
+              R"T(Good. Your mother tells every relative that you are a
+very polite and smart girl.
+"Meri beti ko ghar ka kaam bhi aata hai aur padhai bhi
+kar leti hai.")T",
+              70, 85, 0, "", ""},
+             {"Prioritize some friends",
+              R"T(Your mother tells you to focus on studies more, or they
+will marry you off soon. Obviously as a joke, but still,
+you are so young.)T",
+              80, 75, 0, "", ""}}};
+}
+
+Scene age13(Gender g, int path) {
+    if (g == Gender::Male && path == 0) {
+        return {BOY_PREFACE,
+                R"T(You have a very great friend group. You are confident, funny,
+and everyone around you likes you. Teachers know your name,
+and you never have to eat lunch alone.
+
+But you have started to feel a lot of pressure to be liked
+by everyone. You can't handle being disliked by anyone.)T",
+                {{"Become the funny guy in your friend group",
+                  R"T(You make jokes, tease your friends, and know how to make
+everyone laugh. People enjoy having you around.
+But sometimes you feel like you always have to be funny,
+even when you're not in the mood.
+Other people like your confidence, but your parents don't.)T",
+                  85, 80, 85, "Jester", "Funny, confident, popular, but hides moods behind jokes"},
+                 {"Become the guy who's always up for fun",
+                  R"T(You hang out with friends, try new things, and make the
+most of your teenage years. You always have something going on.
+But sometimes you agree to things you don't want to do,
+just because you don't want to miss out.
+Your parents tell you not to be with your friends so much,
+or you will pick up bad habits. Every late night ends with
+a lecture, and every new friend gets a background check.)T",
+                  80, 70, 80, "Adventurer", "Adventurous, spontaneous, but struggles to say no"}}};
+    }
+
+    if (g == Gender::Male) {
+        return {BOY_PREFACE,
+                R"T(You are the class topper now, but you have become even more
+competitive about marks, and you feel more pressure to
+succeed academically.
+
+You see some of your classmates enjoying life and having
+a great group of friends.)T",
+                {{"Open up to people and explore your changing identity",
+                  R"T(Your marks start to decline, but your parents are kind of
+happy that you finally have some friends. Your teacher is
+not. She keeps telling you that your focus is decreasing
+and that you should not hang out with those students.
+Somehow, other people have started to judge you too.)T",
+                  85, 85, 70, "Expressive", "More expressive, socially confident, emotionally aware"},
+                 {"Focus entirely on studies. You have a goal to achieve",
+                  R"T(Your parents adore you, but they tell you to at least go
+out once a day. They have already started planning whether
+you will give JEE, NEET or UPSC.
+You have barely any friends, and your classmates sometimes
+make fun of you. But you love PTMs, because other parents
+always come to you for advice.)T",
+                  70, 90, 95, "Goal Driven", "Disciplined, goal-driven, respected, but lonely at times"}}};
+    }
+
+    if (path == 0) {
+        return {GIRL_PREFACE,
+                R"T(You're one of the brightest students in your class. Your
+teachers expect great things from you, and your parents have
+started thinking about your future.
+
+But puberty has brought its own set of problems. You're told
+to be careful about what you wear, who you talk to, and how
+you behave. Meanwhile, your classmates are making friends and
+enjoying their teenage years.)T",
+                {{"Start making time for yourself and your friends",
+                  R"T(You begin hanging out with classmates, talking about things
+other than exams, and enjoying life outside the classroom.
+Your marks aren't as perfect as before, but you're happier
+having people to share your life with.
+
+Your parents are glad you've made friends, but they still
+remind you not to lose focus. Some teachers think you're
+becoming distracted, and relatives have started asking why
+you aren't studying as much as you used to.)T",
+                  85, 85, 75, "Outgoing", "More outgoing, socially confident, emotionally aware"},
+                 {"Focus entirely on your studies. You have a goal to achieve",
+                  R"T(You keep working hard, and your parents couldn't be prouder.
+They've started discussing your future career and whether
+you should prepare for JEE, NEET, or UPSC someday.
+
+You love PTMs because your teachers praise you, and other
+parents ask yours how they raised such a good student.
+
+But you have very few friends, and some classmates think
+you're too serious. At home, you're also expected to help
+out because apparently, being a topper doesn't excuse you
+from household chores.)T",
+                  70, 95, 90, "Ambitious",
+                  "Disciplined, ambitious, independent, but prone to putting pressure on yourself"}}};
+    }
+
+    return {GIRL_PREFACE,
+            R"T(You have a great group of friends. You laugh a lot, make
+memories, and actually look forward to going to school.
+
+You're confident, expressive, and comfortable around people.
+You know the latest gossip, have plenty of stories to tell,
+and rarely spend your entire lunch break discussing homework.
+
+But puberty has changed things. Your parents have started
+asking more questions about where you're going, who's coming
+along, and whether any boys will be there.)T",
+            {{"Become the funny girl in your friend group",
+              R"T(You make jokes, tease your friends, and know how to make
+everyone laugh. People enjoy having you around, and you're
+often the one who brings everyone together when there's drama.
+
+But sometimes you feel like you always have to be cheerful,
+even when something is bothering you. People expect you to
+laugh things off, and some relatives think you're becoming
+too loud or outspoken.
+
+Your friends love your confidence, but your parents keep
+telling you to behave more seriously and stop acting like
+you're still a little kid.)T",
+              85, 80, 85, "Comedian",
+              "Funny, expressive, socially confident, but sometimes hides her feelings behind humour"},
+             {"Make the most of your teenage years",
+              R"T(You spend time with friends, try new things, and make
+memories instead of worrying about every little thing. You
+enjoy going out, discovering new interests, and getting to
+know people outside your usual circle.
+
+But your parents worry that you're spending too much time
+outside and that your friends might influence you badly.
+Every outing comes with questions, every late return leads
+to an argument, and every male friend seems to require an
+explanation.
+
+Your friends think you're fun to be around, but at home,
+you're constantly reminded that a girl's reputation matters
+and that you should know your limits.)T",
+              90, 70, 75, "Free Spirit",
+              "Adventurous, independent, open-minded, but sometimes struggles with family expectations"}}};
+}
+
+}
+
+class Screen {
+public:
+    explicit Screen(Context& c) : ctx_(c) {}
+    virtual ~Screen() = default;
+    virtual void run() = 0;
+
+protected:
+    Context& ctx_;
+};
+
+class MenuScreen : public Screen {
+public:
+    using Screen::Screen;
+
+    void run() override {
+        while (true) {
+            std::cout << "CHOOSE ONE OPTION:\n\n1. WHAT IS THIS GAME\n2. HOW TO PLAY\n3. SETTINGS\n4. START\n";
+            int c = ui::askChoice(1, 4);
+
+            if (c == 1) {
+                page(R"T(WHAT IS THIS GAME?
+
+This is a basic choice-based game set in India.
+You are born, you make choices, and life happens.
+It is nothing serious. Just fun.)T");
+            } else if (c == 2) {
+                page(R"T(HOW TO PLAY
+
+Just type the number of the choice you want.
+Like in real life, you have the freedom of choice.
+(Whether the choice matters is another question.))T");
+            } else if (c == 3) {
+                settingsPage();
+            } else {
+                return;
+            }
+        }
+    }
+
+private:
+    void page(const std::string& text) {
+        std::cout << text << "\n";
+        ui::waitEnter();
+    }
+
+    void settingsPage() {
+        std::cout << "SETTINGS\n\nShow spicy facts and stats?\n\n1. YES (spicy ON)\n2. NO  (spicy OFF)\n";
+        int c = ui::askChoice(1, 2);
+        ctx_.settings.setSpicy(c == 1);
+        ctx_.files.saveSettings(ctx_.settings);
+        std::cout << "\n" << (c == 1 ? "Spicy is ON." : "Spicy is OFF.") << "\n";
+        ui::waitEnter();
+    }
+};
+
+class BirthScreen : public Screen {
+public:
+    using Screen::Screen;
+
+    void run() override {
+        Player& p = ctx_.player;
+        std::cout << "BIRTH\n\nCHOOSE ONE OPTION:\n\n1. MALE\n2. FEMALE\n";
+        int c = ui::askChoice(1, 2);
+
+        if (c == 1) {
+            p.setGender(Gender::Male);
+            std::mt19937 rng{std::random_device{}()};
+            int sisters = std::uniform_int_distribution<int>(2, 4)(rng);
+
+            std::cout << "Congratulations, you're a boy!\n\n"
+                      << "Your entire family is overjoyed. You have " << sisters
+                      << " older sisters, but don't worry,\n"
+                      << "they barely count. Your parents finally got what they wanted:\n"
+                      << "someone to carry the family name, inherit the property,\n"
+                      << "and prove the previous attempts weren't in vain.\n";
+
+            if (ctx_.settings.spicy())
+                std::cout << "\nSPICE: In India, around 35% of families with two daughters\n"
+                             "and no sons wanted another child, compared with 9% of\n"
+                             "families with two sons and no daughters. [NFHS-5]\n";
+        } else {
+            p.setGender(Gender::Female);
+            std::cout << "Sorry, you spawned in the wrong family.\n\n"
+                         "Your existence became a problem the moment\n"
+                         "they discovered you weren't a boy.\n";
+
+            if (ctx_.settings.spicy())
+                std::cout << "\nSPICE: An estimated 9 million girls went missing due to\n"
+                             "sex-selective abortions between 2000 and 2019.\n";
+
+            ui::waitEnter("(Press Enter to try again)");
+
+            std::cout << "Congratulations! This time you were born into a good family,\n"
+                         "and they all love you.\n";
+        }
+
+        p.setStats(100, 0, 0);
+        p.setStage(0);
+        std::cout << "\nAGE 0: You are born.\n";
+        p.showStats();
+        ctx_.files.saveGame(p);
+        ctx_.files.logChoice("Age 0", p, c == 1 ? "MALE" : "FEMALE");
+        ui::waitEnter();
+    }
+};
+
+class StoryScreen : public Screen {
+public:
+    StoryScreen(Context& c, int age) : Screen(c), age_(age) {}
+
+    void run() override {
+        Player& p = ctx_.player;
+        Scene sc = (age_ == 10) ? story::age10(p.gender()) : story::age13(p.gender(), p.path());
+
+        std::cout << "AGE " << age_ << "\n\n";
+
+        if (!sc.preface.empty()) {
+            std::cout << sc.preface << "\n";
+            ui::waitEnter();
+            std::cout << "AGE " << age_ << "\n\n";
+        }
+
+        std::cout << sc.text << "\n\n";
+
+        for (size_t i = 0; i < sc.choices.size(); ++i)
+            std::cout << (i + 1) << ". " << sc.choices[i].label << "\n";
+
+        int pick = ui::askChoice(1, static_cast<int>(sc.choices.size()));
+        const Choice& ch = sc.choices[pick - 1];
+
+        std::cout << ch.result << "\n";
+
+        p.setStats(ch.happiness, ch.parents, ch.log);
+
+        if (age_ == 10) {
+            p.setPath(pick - 1);
+            p.setStage(1);
+        } else {
+            p.setPersonality(ch.personality + ": " + ch.personalityDesc);
+            p.setStage(2);
+        }
+
+        p.showStats();
+        ctx_.files.saveGame(p);
+        ctx_.files.logChoice("Age " + std::to_string(age_), p, ch.label);
+        ui::waitEnter();
+    }
+
+private:
+    int age_;
+};
+
+class EndingScreen : public Screen {
+public:
+    using Screen::Screen;
+
+    void run() override {
+        std::cout << "PERSONALITY: " << ctx_.player.personality() << "\n";
+        ctx_.player.showStats();
+        std::cout << "\nTo be continued...\n";
+        ctx_.files.clearSave();
+        ui::waitEnter("(Press Enter to exit)");
+    }
+};
+
+class Game {
+public:
+    Game() {
+        ctx_.files.loadSettings(ctx_.settings);
+    }
+
+    void play() {
+        MenuScreen(ctx_).run();
+
+        bool resumed = tryResume();
+        std::vector<std::unique_ptr<Screen>> flow;
+
+        if (!resumed) {
+            ctx_.player = Player();
+            flow.push_back(std::make_unique<BirthScreen>(ctx_));
+        }
+
+        if (ctx_.player.stage() < 1 || !resumed)
+            flow.push_back(std::make_unique<StoryScreen>(ctx_, 10));
+
+        if (ctx_.player.stage() < 2 || !resumed)
+            flow.push_back(std::make_unique<StoryScreen>(ctx_, 13));
+
+        flow.push_back(std::make_unique<EndingScreen>(ctx_));
+
+        for (auto& s : flow)
+            s->run();
+    }
+
+private:
+    bool tryResume() {
+        if (!ctx_.files.loadGame(ctx_.player)) return false;
+
+        std::cout << "A saved game was found.\n\n1. CONTINUE\n2. NEW GAME\n";
+
+        if (ui::askChoice(1, 2) == 1) return true;
+
+        ctx_.files.clearSave();
+        return false;
+    }
+
+    Context ctx_;
+};
+
+int main() {
+    try {
+        Game game;
+        game.play();
+    } catch (const std::exception& e) {
+        std::cout << "\nGame closed (" << e.what() << ").\n";
+    }
+
+    return 0;
+}
